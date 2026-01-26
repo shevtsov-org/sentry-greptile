@@ -343,3 +343,55 @@ class SimpleQueueProcessingStrategy(ProcessingStrategy[KafkaPayload], Generic[T]
 
     def join(self, timeout: float | None = None) -> None:
         self.close()
+
+    def join(self, timeout: float | None = None) -> None:
+        self.close()
+
+
+class ThreadQueueParallelStrategyFactory(ProcessingStrategyFactory[KafkaPayload]):
+    """
+    Factory for creating thread-queue-parallel processing strategies.
+    
+    This factory creates a processing strategy that uses a fixed pool of queues
+    with dedicated worker threads for parallel processing of results.
+    """
+
+    def __init__(
+        self,
+        max_workers: int | None,
+        grouping_fn: Callable[[Any], str],
+        result_processor: ResultProcessor,
+        topic: Topic,
+        identifier: str,
+    ) -> None:
+        self.max_workers = max_workers
+        self.grouping_fn = grouping_fn
+        self.result_processor = result_processor
+        self.topic = topic
+        self.identifier = identifier
+
+    def create_with_partitions(
+        self, commit: Callable[[Mapping[Partition, int]], None], partitions: Mapping[Partition, int]
+    ) -> ProcessingStrategy[KafkaPayload]:
+        # Determine the number of workers to use
+        num_workers = self.max_workers or 4
+        
+        # Create a queue pool with the specified number of workers
+        queue_pool = FixedQueuePool(
+            identifier=self.identifier,
+            num_workers=num_workers,
+            grouping_fn=self.grouping_fn,
+        )
+        
+        # Create the processing strategy
+        return SimpleQueueProcessingStrategy(
+            queue_pool=queue_pool,
+            decoder=partial(self._decode_payload, self.topic),
+            grouping_fn=self.grouping_fn,
+            commit_function=commit,
+        )
+
+    def _decode_payload(self, topic: Topic, payload: KafkaPayload | FilteredPayload) -> Any | None:
+        """Decode the payload using the topic codec."""
+        codec = get_topic_codec(topic)
+        return codec.decode(payload)
